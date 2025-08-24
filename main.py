@@ -10,6 +10,10 @@ import json
 import os
 from openai import OpenAI
 import dotenv
+from sqlalchemy.orm import Session
+from database import get_db
+from models import User
+from auth import authenticate_user, create_access_token, verify_token, get_password_hash
 dotenv.load_dotenv()
 
 # --- Configuration ---
@@ -29,16 +33,13 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
-# --- Security (Dummy User DB & JWT) ---
-# For demo purposes, we have a hardcoded user.
-# In a real app, this would be a database.
-DUMMY_USERS_DB = {"testuser": "testpassword"}
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    password: str
 
-def authenticate_user(username: str, password: str):
-    if username in DUMMY_USERS_DB and DUMMY_USERS_DB[username] == password:
-        return True
-    return False
+# --- Security ---
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # --- Load Search Index and Model (at startup) ---
 try:
@@ -52,19 +53,72 @@ except FileNotFoundError:
 
 # --- API Endpoints ---
 @app.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    if not authenticate_user(form_data.username, form_data.password):
+async def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # In a real app, you would create a proper JWT token here.
-    # For simplicity, we'll use a placeholder token.
-    return {"access_token": form_data.username, "token_type": "bearer"}
+    
+    access_token = create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/register", response_model=Token)
+async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
+    # Check if user already exists
+    existing_user = db.query(User).filter(
+        (User.username == user_data.username) | (User.email == user_data.email)
+    ).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username or email already registered"
+        )
+    
+    # Create new user
+    hashed_password = get_password_hash(user_data.password)
+    new_user = User(
+        username=user_data.username,
+        email=user_data.email,
+        hashed_password=hashed_password
+    )
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    # Return token for immediate login
+    access_token = create_access_token(data={"sub": new_user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/search")
-async def search_pdf(request: SearchQuery, token: str = Depends(oauth2_scheme)):
+async def search_pdf(
+    request: SearchQuery, 
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    # Verify the token and get the username
+    username = verify_token(token)
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Verify user exists in database
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     # 1. Embed the user's query
     query_embedding = model.encode([request.query])[0].astype('float32')
     query_embedding = np.expand_dims(query_embedding, axis=0) # Reshape for FAISS
