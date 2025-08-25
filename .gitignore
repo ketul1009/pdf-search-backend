@@ -51,11 +51,20 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Project specific
+# Project specific - Generated files (regenerated on deployment)
 pdf_index.faiss
 metadata.json
-*.pdf
 *.faiss
+
+# Project specific - User uploads (should be on server storage)
+uploads/
+uploads/*
+
+# Project specific - Sample/test PDFs (keep only source code)
+*.pdf
+!requirements.pdf
+!README.pdf
+!docs/*.pdf
 
 # Logs
 *.log
@@ -66,4 +75,25 @@ logs/
 *.temp
 temp/
 tmp/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Alembic (keep these files but ignore cache)
+alembic/__pycache__/
+alembic/*.pyc
+
+# Test files
+test_*.py
+*_test.py
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Backup files
+*.bak
+*.backup
+*~
 
